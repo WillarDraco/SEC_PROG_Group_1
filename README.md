@@ -6,6 +6,15 @@ Plaintext broadcast messages
 Secure file transfer (RSA-OAEP per chunk)
 Multi-server routing and introducer registration
 
+## Contact
+
+```
+Name                        ID              Discord
+Benjamin Signorelli         a1861126        dracomaleficus
+Willard Gorman              a1863235        nihili
+Gia Thanh Nguyen            a1876555        g.l.toys
+```
+
 ## Requirements
 
 Make sure you have Python 3.10+ installed.
