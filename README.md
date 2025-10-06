@@ -11,7 +11,9 @@ Multi-server routing and introducer registration
 Make sure you have Python 3.10+ installed.
 Then install dependencies:
 
-`pip install cryptography`
+```
+pip install cryptography
+```
 
 ## Project Structure
 
@@ -56,7 +58,6 @@ You’ll see something like:
 ```
 [Server] Running on 127.0.0.1:8000
 [Introducer] Server list received: ...
-
 ```
 
 Leave this running.
