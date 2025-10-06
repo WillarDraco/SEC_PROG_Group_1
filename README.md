@@ -22,23 +22,23 @@ SecureProgramming/
 ├── client.py # Main client app
 │
 ├── server/
-│ ├── **init**.py
+│ ├── __init__.py
 │ └── transport_sig.py
 │
 ├── client/
-│ ├── **init**.py
+│ ├── __init__.py
 │ ├── crypto_km.py
 │ ├── crypto_dm.py
 │ ├── crypto_file.py
 │ ├── crypto_api.py
 │
 └── common/
-├── **init**.py
+├── __init__.py
 ├── b64url.py
 └── canon.py
 ```
 
-Each folder must contain an empty **init**.py to make imports work.
+Each folder must contain an empty `__init__.py` to make imports work.
 
 ## How to Run the System
 
