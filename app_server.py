@@ -352,8 +352,8 @@ class Server:
                     await writer.drain()
                     print(f"[User List] Sent USER_LIST to {sender} on request")
 
-                # -------------------- MSG_BROADCAST --------------------
-                elif msg_type == "MSG_BROADCAST":
+                # -------------------- MSG_PUBLIC_CHANNEL --------------------
+                elif msg_type == "MSG_PUBLIC_CHANNEL":
                     try:
                         mid = self._broadcast_id(message)
                     except Exception as e:

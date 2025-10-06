@@ -151,7 +151,7 @@ class Client:
                         print(f"[File] ✅ Received {dest} ({len(data)} bytes)")
                     del self.incoming_files[file_id]
 
-                elif mtype == "MSG_BROADCAST":
+                elif mtype == "MSG_PUBLIC_CHANNEL":
                     bid = f"{message.get('from')}|{message.get('ts')}"
                     if bid in self.seen_broadcasts:
                         continue
@@ -325,7 +325,7 @@ class Client:
                     continue
                 # NOTE: public channel encryption not wired here; this is plaintext broadcast for now.
                 # If needed, you can do per-recipient RSA like DM fan-out at client or leave as is.
-                env = {"type": "MSG_BROADCAST", "from": self.client_id, "to": "*", "ts": int(time.time()*1000),
+                env = {"type": "MSG_PUBLIC_CHANNEL", "from": self.client_id, "to": "*", "ts": int(time.time()*1000),
                        "payload": {"text": text}, "sig": "", "visited_servers": []}
                 writer.write((json.dumps(env) + "\n").encode("utf-8"))
                 await writer.drain()

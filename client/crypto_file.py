@@ -7,9 +7,6 @@ from cryptography.hazmat.primitives.asymmetric import padding
 # ---- RSA-OAEP ciphertext ---- #
 def make_file_chunk_payload(receiver_pub_der_b64u: str, file_id: str, index: int, plaintext_chunk: bytes) -> dict:
     rpk = pub_from_der(ub64u(receiver_pub_der_b64u))
-    if len(plaintext_chunk) > 446:
-        raise ValueError(
-            "Chunk exceeds RSA-OAEP maximum for 4096-bit key (446 bytes).")
 
     ct = rpk.encrypt(
         plaintext_chunk,
