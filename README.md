@@ -15,6 +15,7 @@ Then install dependencies:
 
 ## Project Structure
 
+```
 SecureProgramming/
 │
 ├── app_server.py # Main server app
@@ -35,6 +36,8 @@ SecureProgramming/
 ├── **init**.py
 ├── b64url.py
 └── canon.py
+```
+
 Each folder must contain an empty **init**.py to make imports work.
 
 ## How to Run the System
