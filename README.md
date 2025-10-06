@@ -47,13 +47,17 @@ Each folder must contain an empty **init**.py to make imports work.
 The introducer is the first server that other servers register to.
 In one terminal, run:
 
-`python3 app_server.py`
+```
+python3 app_server.py
+```
 
 You’ll see something like:
 
-`[Server] Running on 127.0.0.1:8000`
+```
+[Server] Running on 127.0.0.1:8000
+[Introducer] Server list received: ...
 
-`[Introducer] Server list received: ...`
+```
 
 Leave this running.
 
@@ -61,13 +65,16 @@ Leave this running.
 
 Open two more terminals, and run each with a different port:
 
-`python3 app_server.py`
+```
+python3 app_server.py
+```
 
 Each server will auto-register with the introducer and print something like:
 
-`[Server] Running on 127.0.0.1:36095`
-
-`[Introducer] Server list received: ...`
+```
+[Server] Running on 127.0.0.1:36095
+[Introducer] Server list received: ...
+```
 
 ### 3 Start Clients
 
@@ -75,15 +82,17 @@ Open another terminal for each client.
 Run the client, and when asked for Server port, enter one of the ports printed by a server.
 Example:
 
-`python3 client.py`
-
-`Server port: 36095`
+```
+python3 client.py
+Server port: 36095
+```
 
 Output:
 
-`[Hello] Sent USER_HELLO (pubkey attached)`
-
-`[Me] user_id = e08d3983-64ac-40c9-ad99-9f3a836dfe2f`
+```
+[Hello] Sent USER_HELLO (pubkey attached)
+[Me] user_id = e08d3983-64ac-40c9-ad99-9f3a836dfe2f
+```
 
 ## Commands
 
@@ -99,8 +108,8 @@ Once connected, you can use the following commands in the client terminal:
 
 Example:
 
-`/tell 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 hey userX!`
-
-`/all hello everyone`
-
-`/file 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 test.txt`
+```
+/tell 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 hey userX!
+/all hello everyone
+/file 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 test.txt
+```
