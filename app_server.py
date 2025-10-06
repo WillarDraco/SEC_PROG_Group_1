@@ -1,11 +1,14 @@
-# server.py
+# app_server.py
 import asyncio
 import json
 import uuid
 import time
-from client import *
-from common import *
-from server import *
+import hashlib
+import json
+
+from server.transport_sig import server_sign_payload, server_verify_payload
+
+
 class Server:
     def __init__(self, host="127.0.0.1", port=0, introducer_host="127.0.0.1", introducer_port=8000):
         self.server_id = str(uuid.uuid4())
@@ -14,13 +17,36 @@ class Server:
         self.introducer_host = introducer_host
         self.introducer_port = introducer_port
 
+        self.user_pubkeys = {}   # user_id -> pubkey_b64u
         self.peers = {}                 # server_id -> {"host":..., "port":...}
         self.active_peer_writers = {}   # server_id -> writer
         self.active_clients = {}        # client_id -> writer
         self.user_locations = {}        # client_id -> server_id
         self.active_files = {}          # file_id -> metadata
+        self.seen_msgs = set()   # remembers broadcast ids we've processed
+
+    # Helper to compute a sstable id
+    def _broadcast_id(self, msg: dict) -> str:
+        core = {
+            "type": msg.get("type"),
+            "from": msg.get("from"),
+            "ts":   msg.get("ts"),
+        }
+        payload = msg.get("payload", {})
+        try:
+            payload_bytes = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        except Exception:
+            payload_bytes = str(payload).encode("utf-8")
+        head_bytes = json.dumps(core, sort_keys=True,
+                                separators=(",", ":")).encode("utf-8")
+        h = hashlib.sha256()
+        h.update(head_bytes)
+        h.update(payload_bytes)
+        return h.hexdigest()
 
     # -------------------- Introducer registration --------------------
+
     async def register_with_introducer(self):
         try:
             reader, writer = await asyncio.open_connection(self.introducer_host, self.introducer_port)
@@ -56,7 +82,8 @@ class Server:
                             break
                     if uid and sid:
                         self.user_locations[uid] = sid
-                print(f"[User Locations] Initialized from introducer: {self.user_locations}")
+                print(
+                    f"[User Locations] Initialized from introducer: {self.user_locations}")
             writer.close()
             await writer.wait_closed()
         except Exception as e:
@@ -102,7 +129,11 @@ class Server:
                 if msg_type == "USER_HELLO":
                     self.active_clients[sender] = writer
                     self.user_locations[sender] = self.server_id
-                    ack = {"type": "USER_HELLO_ACK", "from": self.server_id, "to": sender, "payload": {}}
+                    pub = message.get("payload", {}).get("pubkey", "")
+                    if pub:
+                        self.user_pubkeys[sender] = pub
+                    ack = {"type": "USER_HELLO_ACK",
+                           "from": self.server_id, "to": sender, "payload": {}}
                     writer.write((json.dumps(ack) + "\n").encode("utf-8"))
                     await writer.drain()
                     print(f"[Hello] Registered client {sender}")
@@ -129,13 +160,17 @@ class Server:
 
                     for peer_id, peer_writer in list(self.active_peer_writers.items()):
                         try:
-                            peer_writer.write((json.dumps(advertise_msg) + "\n").encode("utf-8"))
+                            peer_writer.write(
+                                (json.dumps(advertise_msg) + "\n").encode("utf-8"))
                             await peer_writer.drain()
-                            print(f"[Advertise] Sent USER_ADVERTISE for {sender} to peer {peer_id}")
+                            print(
+                                f"[Advertise] Sent USER_ADVERTISE for {sender} to peer {peer_id}")
                         except Exception as e:
-                            print(f"[Error] Failed to advertise user {sender} to peer {peer_id}: {e}")
+                            print(
+                                f"[Error] Failed to advertise user {sender} to peer {peer_id}: {e}")
 
-                    asyncio.create_task(self.send_advertise_to_introducer(advertise_msg))
+                    asyncio.create_task(
+                        self.send_advertise_to_introducer(advertise_msg))
 
                 # -------------------- USER_ADVERTISE --------------------
                 elif msg_type == "USER_ADVERTISE":
@@ -144,48 +179,69 @@ class Server:
                     server_id = payload.get("server_id")
                     if user_id and server_id:
                         self.user_locations[user_id] = server_id
-                        print(f"[User Locations] Updated from peer: {user_id} -> {server_id}")
+                        pub = payload.get("meta", {}).get("pubkey", "")
+                        if pub:
+                            self.user_pubkeys[user_id] = pub
+                        print(
+                            f"[User Locations] Updated from peer: {user_id} -> {server_id}")
 
                 # -------------------- MSG_DIRECT --------------------
                 elif msg_type == "MSG_DIRECT":
                     if recipient in self.active_clients:
                         recipient_writer = self.active_clients[recipient]
-                        recipient_writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                        recipient_writer.write(
+                            (json.dumps(message) + "\n").encode("utf-8"))
                         await recipient_writer.drain()
-                        print(f"[Delivered] Direct message from {sender} delivered locally to {recipient}")
+                        print(
+                            f"[Delivered] Direct message from {sender} delivered locally to {recipient}")
                     elif recipient in self.user_locations:
                         target_server_id = self.user_locations[recipient]
                         if target_server_id == self.server_id:
-                            print(f"[Routing] Recipient {recipient} expected local but not found")
-                            error_msg = {"type": "USER_NOT_FOUND", "from": self.server_id, "to": sender, "payload": {"missing_user": recipient}}
+                            print(
+                                f"[Routing] Recipient {recipient} expected local but not found")
+                            error_msg = {"type": "USER_NOT_FOUND", "from": self.server_id, "to": sender, "payload": {
+                                "missing_user": recipient}}
                             if sender in self.active_clients:
-                                self.active_clients[sender].write((json.dumps(error_msg) + "\n").encode("utf-8"))
+                                self.active_clients[sender].write(
+                                    (json.dumps(error_msg) + "\n").encode("utf-8"))
                                 await self.active_clients[sender].drain()
                         else:
-                            peer_writer = self.active_peer_writers.get(target_server_id)
+                            peer_writer = self.active_peer_writers.get(
+                                target_server_id)
                             if peer_writer:
-                                message["visited_servers"] = list(visited | {self.server_id})
-                                peer_writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                                message["visited_servers"] = list(
+                                    visited | {self.server_id})
+                                peer_writer.write(
+                                    (json.dumps(message) + "\n").encode("utf-8"))
                                 await peer_writer.drain()
-                                print(f"[Forwarded] Direct message from {sender} forwarded to server {target_server_id}")
+                                print(
+                                    f"[Forwarded] Direct message from {sender} forwarded to server {target_server_id}")
                             else:
-                                print(f"[Routing] Target server {target_server_id} for {recipient} not connected")
+                                print(
+                                    f"[Routing] Target server {target_server_id} for {recipient} not connected")
                     else:
-                        error_msg = {"type": "USER_NOT_FOUND", "from": self.server_id, "to": sender, "payload": {"missing_user": recipient}}
+                        error_msg = {"type": "USER_NOT_FOUND", "from": self.server_id,
+                                     "to": sender, "payload": {"missing_user": recipient}}
                         if sender in self.active_clients:
-                            self.active_clients[sender].write((json.dumps(error_msg) + "\n").encode("utf-8"))
+                            self.active_clients[sender].write(
+                                (json.dumps(error_msg) + "\n").encode("utf-8"))
                             await self.active_clients[sender].drain()
-                        print(f"[Error] USER_NOT_FOUND for recipient {recipient}")
+                        print(
+                            f"[Error] USER_NOT_FOUND for recipient {recipient}")
 
-                # -------------------- USER_LIST_REQUEST --------------------   
+                # -------------------- USER_LIST_REQUEST --------------------
                 elif msg_type == "USER_LIST_REQUEST":
                     # send current sorted list back to requester
-                    users_sorted = [{"user_id": uid, "server_id": sid} for uid, sid in sorted(self.user_locations.items())]
+                    users_sorted = [
+                        {"user_id": uid, "server_id": sid,
+                            "pubkey": self.user_pubkeys.get(uid, "")}
+                        for uid, sid in sorted(self.user_locations.items())
+                    ]
                     resp = {
                         "type": "USER_LIST",
                         "from": self.server_id,
                         "to": sender,
-                        #"ts": int(time.time() * 1000),
+                        # "ts": int(time.time() * 1000),
                         "payload": {"users": users_sorted},
                         "sig": ""
                     }
@@ -195,19 +251,47 @@ class Server:
 
                 # -------------------- MSG_BROADCAST --------------------
                 elif msg_type == "MSG_BROADCAST":
-                    sender_id = message.get("from")
-                    for client_id, client_writer in self.active_clients.items():
-                        if client_id != sender_id:
-                            client_writer.write((json.dumps(message) + "\n").encode("utf-8"))
-                            await client_writer.drain()
-                    message["visited_servers"] = list(visited | {self.server_id})
-                    for peer_id, peer_writer in list(self.active_peer_writers.items()):
-                        if peer_id not in visited:
-                            try:
-                                peer_writer.write((json.dumps(message) + "\n").encode("utf-8"))
-                                await peer_writer.drain()
-                            except Exception as e:
-                                print(f"[Error] Failed to forward broadcast to {peer_id}: {e}")
+                    try:
+                        mid = self._broadcast_id(message)
+                    except Exception as e:
+                        print(
+                            f"[Broadcast] could not compute id: {e}; message={message}")
+                        mid = None
+
+                    if mid is not None:
+                        if mid in self.seen_msgs:
+                            # already processed — no local delivery, no forwarding
+                            continue
+                        self.seen_msgs.add(mid)
+
+                    # ---- local delivery (except to sender) ----
+                    try:
+                        sender_id = message.get("from")
+                        for client_id, client_writer in list(self.active_clients.items()):
+                            if client_id != sender_id:
+                                client_writer.write(
+                                    (json.dumps(message) + "\n").encode("utf-8"))
+                                await client_writer.drain()
+                    except Exception as e:
+                        print(f"[Broadcast] local delivery error: {e}")
+
+                    # ---- forwarding to peers that haven't seen it ----
+                    try:
+                        visited = set(message.get("visited_servers", []))
+                        visited.add(self.server_id)
+                        message["visited_servers"] = list(visited)
+
+                        for peer_id, peer_writer in list(self.active_peer_writers.items()):
+                            if peer_id not in visited:
+                                try:
+                                    peer_writer.write(
+                                        (json.dumps(message) + "\n").encode("utf-8"))
+                                    await peer_writer.drain()
+                                except Exception as e:
+                                    print(
+                                        f"[Broadcast] forward error to {peer_id}: {e}")
+                    except Exception as e:
+                        print(f"[Broadcast] forwarding block error: {e}")
 
                 # -------------------- SERVER_ANNOUNCE --------------------
                 elif msg_type == "SERVER_ANNOUNCE":
@@ -218,9 +302,11 @@ class Server:
                             peer_port = message["payload"]["port"]
                             peer_reader, peer_writer = await asyncio.open_connection(peer_host, peer_port)
                             self.active_peer_writers[peer_id] = peer_writer
-                            print(f"[Peer] Connected back to announcing server {peer_id}")
+                            print(
+                                f"[Peer] Connected back to announcing server {peer_id}")
                         except Exception as e:
-                            print(f"[Error] Failed to connect back to announcing server {peer_id}: {e}")
+                            print(
+                                f"[Error] Failed to connect back to announcing server {peer_id}: {e}")
 
                 # -------------------- FILE HANDLING --------------------
                 elif msg_type in ["FILE_START", "FILE_CHUNK", "FILE_END"]:
@@ -237,36 +323,47 @@ class Server:
                             "sha256": payload.get("sha256"),
                             "mode": payload.get("mode", "dm")
                         }
-                        print(f"[File] FILE_START {file_id} from {sender} to {recipient}")
+                        print(
+                            f"[File] FILE_START {file_id} from {sender} to {recipient}")
 
                     if not recipient and file_id in self.active_files:
                         recipient = self.active_files[file_id]["recipient"]
 
                     if not recipient:
-                        print(f"[File] Missing recipient for {msg_type}, ignoring.")
+                        print(
+                            f"[File] Missing recipient for {msg_type}, ignoring.")
                         continue
 
                     if recipient in self.active_clients:
                         rec_writer = self.active_clients[recipient]
-                        rec_writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                        rec_writer.write(
+                            (json.dumps(message) + "\n").encode("utf-8"))
                         await rec_writer.drain()
-                        print(f"[File] Delivered {msg_type} locally to {recipient}")
+                        print(
+                            f"[File] Delivered {msg_type} locally to {recipient}")
                     elif recipient in self.user_locations:
                         target_server_id = self.user_locations[recipient]
                         if target_server_id != self.server_id and target_server_id in self.active_peer_writers:
                             peer_writer = self.active_peer_writers[target_server_id]
-                            message["visited_servers"] = list(visited | {self.server_id})
-                            peer_writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                            message["visited_servers"] = list(
+                                visited | {self.server_id})
+                            peer_writer.write(
+                                (json.dumps(message) + "\n").encode("utf-8"))
                             await peer_writer.drain()
-                            print(f"[File] Forwarded {msg_type} for {recipient} to server {target_server_id}")
+                            print(
+                                f"[File] Forwarded {msg_type} for {recipient} to server {target_server_id}")
                         else:
-                            print(f"[File Routing] Target server {target_server_id} not connected for {recipient}")
+                            print(
+                                f"[File Routing] Target server {target_server_id} not connected for {recipient}")
                     else:
-                        err = {"type": "USER_NOT_FOUND", "from": self.server_id, "to": sender, "payload": {"missing_user": recipient}}
+                        err = {"type": "USER_NOT_FOUND", "from": self.server_id,
+                               "to": sender, "payload": {"missing_user": recipient}}
                         if sender in self.active_clients:
-                            self.active_clients[sender].write((json.dumps(err) + "\n").encode("utf-8"))
+                            self.active_clients[sender].write(
+                                (json.dumps(err) + "\n").encode("utf-8"))
                             await self.active_clients[sender].drain()
-                        print(f"[File Error] USER_NOT_FOUND for recipient {recipient}")
+                        print(
+                            f"[File Error] USER_NOT_FOUND for recipient {recipient}")
 
                     if msg_type == "FILE_END" and file_id in self.active_files:
                         print(f"[File] Transfer complete for {file_id}")

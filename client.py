@@ -2,22 +2,41 @@ import asyncio
 import json
 import uuid
 import time
-import base64
 import os
 import hashlib
-from client import *
-from common import *
-from server import *
+
+# --- CRYPTO IMPORTS ---
+from client.crypto_km import gen_rsa_4096, save_pem_priv, load_pem_priv, pub_der_b64u
+from client.crypto_dm import make_dm_payload, open_dm_payload
+from client.crypto_file import make_file_chunk_payload, open_file_chunk_payload
 
 
 class Client:
-    def __init__(self, server_host="127.0.0.1", server_port=9000):
+    def __init__(self, server_host="127.0.0.1", server_port=9000, key_path="me.pem", key_password=b"pwd"):
         self.client_id = str(uuid.uuid4())
         self.server_host = server_host
         self.server_port = server_port
-        self.users = {}  # user_id -> server_id
-        self.active_files = {}  # file_id -> {"name": str, "chunks": []}
-        self.incoming_files = {}  # file_id -> {"name": str, "size": int, "sha": str, "chunks": []}
+
+        # presence + key directories
+        self.users = {}          # user_id -> server_id
+        self.user_pub = {}       # user_id -> pub_der_b64u (for E2E)
+        self.seen_broadcasts = set()
+
+        # files
+        self.active_files = {}   # file_id -> {"name": str, "chunks": []}
+        # file_id -> {"name": str, "size": int, "sha": str, "chunks": []}
+        self.incoming_files = {}
+
+        # key management
+        self.key_path = key_path
+        self.key_password = key_password
+        if os.path.exists(self.key_path):
+            self.priv = load_pem_priv(
+                self.key_path, password=self.key_password)
+        else:
+            self.priv = gen_rsa_4096()
+            save_pem_priv(self.priv, self.key_path, password=self.key_password)
+        self.pub_b64u = pub_der_b64u(self.priv)
 
     # -------------------- SERVER LISTENER --------------------
     async def listen_server(self, reader):
@@ -29,71 +48,113 @@ class Client:
                     break
 
                 message = json.loads(line.decode().strip())
-                msg_type = message.get("type", "")
+                mtype = message.get("type", "")
                 sender = message.get("from", "")
+                payload = message.get("payload", {})
 
-                # --- Incoming chat ---
-                if msg_type == "MSG_DIRECT":
-                    text = message.get("payload", {}).get("text", "")
-                    print(f"\n[Message from {sender}]: {text}")
-
-                elif msg_type == "USER_ADVERTISE":
-                    user_id = message["payload"]["user_id"]
-                    server_id = message["payload"]["server_id"]
+                # --- USERS / KEYS SYNC ---
+                if mtype == "USER_ADVERTISE":
+                    user_id = payload["user_id"]
+                    server_id = payload["server_id"]
                     self.users[user_id] = server_id
-                    print(f"\n[Network Update] User {user_id} on server {server_id}")
+                    # try capture pubkey if present
+                    meta = payload.get("meta", {})
+                    if "pubkey" in meta and meta["pubkey"]:
+                        self.user_pub[user_id] = meta["pubkey"]
+                    print(f"\n[Network] {user_id} on {server_id}")
 
-                elif msg_type == "USER_LIST":
-                    users = message.get("payload", {}).get("users", [])
-                    # update local cache and print sorted
-                    self.users = {u["user_id"]: u.get("server_id") for u in users}
-                    print("\n[User List from server]")
+                elif mtype == "USER_LIST":
+                    # payload.users: [{user_id, server_id, (optional) pubkey}]
+                    users = payload.get("users", [])
+                    self.users = {u["user_id"]: u.get(
+                        "server_id") for u in users}
+                    # capture pubkeys if provided by introducer path
+                    for u in users:
+                        if "pubkey" in u and u["pubkey"]:
+                            self.user_pub[u["user_id"]] = u["pubkey"]
+                    print("\n[User List]")
                     for uid in sorted(self.users.keys()):
-                        print(f"  {uid} -> Server {self.users[uid]}")
+                        print(f"  {uid} -> {self.users[uid]}")
                     continue
 
+                # --- DM (E2E) RECEIVE ---
+                elif mtype == "MSG_DIRECT":
+                    pld = message.get("payload", {})
+                    if all(k in pld for k in ("ciphertext", "sender_pub", "content_sig")):
+                        try:
+                            pt, sender_pub = open_dm_payload(
+                                self.priv,
+                                pld,
+                                message["from"],
+                                message["to"],
+                                message["ts"],
+                            )
+                            print(
+                                f"\n[DM from {sender}]: {pt.decode('utf-8', 'ignore')} 🔒 (E2E)")
+                            # cache sender pub
+                            if "sender_pub" in pld:
+                                self.user_pub[sender] = pld["sender_pub"]
+                        except Exception as e:
+                            print(f"\n[DM] decrypt/verify failed: {e}")
+                    else:
+                        # plaintext fallback (old format)
+                        text = pld.get("text", "")
+                        print(f"\n[DM from {sender}]: {text} (plaintext)")
 
-                # --- File transfer messages ---
-                elif msg_type == "FILE_START":
-                    payload = message["payload"]
+                # --- FILE TRANSFER (E2E on CHUNKS) ---
+                elif mtype == "FILE_START":
                     file_id = payload["file_id"]
                     filename = payload["name"]
                     filesize = payload.get("size", 0)
                     filehash = payload.get("sha256", "")
                     self.incoming_files[file_id] = {
-                        "name": filename,
-                        "size": filesize,
-                        "sha": filehash,
-                        "chunks": []
+                        "name": filename, "size": filesize, "sha": filehash, "chunks": []
                     }
-                    print(f"\n[File] Incoming file '{filename}' ({filesize} bytes, sha256={filehash}) from {sender}")
+                    print(
+                        f"\n[File] Incoming '{filename}' ({filesize} bytes) from {sender}")
 
-                elif msg_type == "FILE_CHUNK":
-                    payload = message["payload"]
+                elif mtype == "FILE_CHUNK":
                     file_id = payload["file_id"]
-                    chunk_data = base64.urlsafe_b64decode(payload["ciphertext"])
                     idx = payload["index"]
-                    if file_id in self.incoming_files:
-                        self.incoming_files[file_id]["chunks"].append((idx, chunk_data))
-                        print(f"[File] Received chunk {idx} for file {file_id}")
+                    if file_id not in self.incoming_files:
+                        # ignore if we never saw the start
+                        continue
+                    try:
+                        chunk_data = open_file_chunk_payload(
+                            self.priv, payload)
+                        self.incoming_files[file_id]["chunks"].append(
+                            (idx, chunk_data))
+                        print(f"[File] Received chunk {idx} for {file_id}")
+                    except Exception as e:
+                        print(f"[File] chunk decrypt failed idx={idx}: {e}")
 
-                elif msg_type == "FILE_END":
-                    payload = message["payload"]
+                elif mtype == "FILE_END":
                     file_id = payload["file_id"]
                     if file_id not in self.incoming_files:
                         continue
                     info = self.incoming_files[file_id]
-                    ordered = [c for _, c in sorted(info["chunks"], key=lambda x: x[0])]
+                    ordered = [c for _, c in sorted(
+                        info["chunks"], key=lambda x: x[0])]
                     data = b"".join(ordered)
                     dest = f"received_{info['name']}"
                     with open(dest, "wb") as f:
                         f.write(data)
                     sha = hashlib.sha256(data).hexdigest()
-                    if sha == info["sha"]:
-                        print(f"[File] ✅ Received and verified {dest} ({len(data)} bytes)")
+                    if info["sha"] and sha != info["sha"]:
+                        print(
+                            f"[File] ⚠️ Hash mismatch for {dest} (expected {info['sha']}, got {sha})")
                     else:
-                        print(f"[File] ⚠️ Hash mismatch for {dest} (expected {info['sha']}, got {sha})")
+                        print(f"[File] ✅ Received {dest} ({len(data)} bytes)")
                     del self.incoming_files[file_id]
+
+                elif mtype == "MSG_BROADCAST":
+                    bid = f"{message.get('from')}|{message.get('ts')}"
+                    if bid in self.seen_broadcasts:
+                        continue
+                    self.seen_broadcasts.add(bid)
+
+                    text = payload.get("text", "")
+                    print(f"\n[Broadcast from {sender}]: {text}")
 
                 else:
                     print(f"\n[Server message]: {message}")
@@ -111,19 +172,25 @@ class Client:
             "ts": int(time.time() * 1000),
             "payload": {
                 "client": "cli-v1",
-                "pubkey": "FAKE_CLIENT_PUBKEY",
-                "enc_pubkey": "FAKE_CLIENT_PUBKEY"
+                "pubkey": self.pub_b64u,   # real RSA-4096 pub
+                "enc_pubkey": self.pub_b64u
             },
             "sig": ""
         }
         writer.write((json.dumps(hello_message) + "\n").encode("utf-8"))
         await writer.drain()
-        print(f"[Hello] Sent USER_HELLO to server")
+        print(f"[Hello] Sent USER_HELLO (pubkey attached)")
 
-    # -------------------- FILE SEND --------------------
+    # -------------------- FILE SEND (RSA-OAEP per chunk) --------------------
     async def send_file(self, writer, recipient_id, file_path):
         if not os.path.exists(file_path):
             print("[File] Error: File not found.")
+            return
+        # need recipient pubkey
+        rec_pub = self.user_pub.get(recipient_id)
+        if not rec_pub:
+            print(
+                "[File] No recipient pubkey known yet; ask them to /tell you once or wait for advertise/list.")
             return
 
         file_id = str(uuid.uuid4())
@@ -147,21 +214,23 @@ class Client:
         }
         writer.write((json.dumps(start_msg) + "\n").encode("utf-8"))
         await writer.drain()
-        print(f"[File] Starting file transfer '{file_path}' ({filesize} bytes)")
+        print(
+            f"[File] Starting file transfer '{file_path}' ({filesize} bytes)")
 
-        # FILE_CHUNK
         CHUNK_SIZE = 32 * 1024
         with open(file_path, "rb") as f:
             index = 0
             sent = 0
             while chunk := f.read(CHUNK_SIZE):
-                encoded = base64.urlsafe_b64encode(chunk).decode()
+                # RSA encrypt the chunk for recipient
+                chunk_payload = make_file_chunk_payload(
+                    rec_pub, file_id, index, chunk)
                 chunk_msg = {
                     "type": "FILE_CHUNK",
                     "from": self.client_id,
                     "to": recipient_id,
                     "ts": int(time.time() * 1000),
-                    "payload": {"file_id": file_id, "index": index, "ciphertext": encoded},
+                    "payload": chunk_payload,
                     "sig": ""
                 }
                 writer.write((json.dumps(chunk_msg) + "\n").encode("utf-8"))
@@ -172,7 +241,6 @@ class Client:
                 print(f"[File] Sent chunk {index} ({percent:.1f}%)", end="\r")
         print()
 
-        # FILE_END
         end_msg = {
             "type": "FILE_END",
             "from": self.client_id,
@@ -190,93 +258,87 @@ class Client:
         while True:
             cmd = await asyncio.to_thread(input, "Enter command (/list, /tell, /all, /file): ")
 
-            # -------------------- LIST USERS --------------------
             if cmd.strip() == "/list":
-                req = {
-                    "type": "USER_LIST_REQUEST",
-                    "from": self.client_id,
-                    "to": "*",
-                    "ts": int(time.time() * 1000),
-                    "payload": {},
-                    "sig": ""
-                }
+                req = {"type": "USER_LIST_REQUEST", "from": self.client_id,
+                       "to": "*", "ts": int(time.time()*1000), "payload": {}, "sig": ""}
                 writer.write((json.dumps(req) + "\n").encode("utf-8"))
                 await writer.drain()
                 print("[List] Requested user list from server...")
                 continue
 
-            # -------------------- DIRECT MESSAGE --------------------
             if cmd.startswith("/tell "):
                 parts = cmd.split(" ", 2)
                 if len(parts) < 3:
                     print("[Input] Usage: /tell <user_id> <message>")
                     continue
 
-                to_id, text = parts[1], parts[2]
-                message = {
+                to_id = parts[1].strip()      # normalise once
+                text = parts[2]
+                rec_pub = self.user_pub.get(to_id)
+                if not rec_pub:
+                    print(
+                        "[DM] No recipient pubkey yet. Ask them to be online or run /list.")
+                    continue
+
+                # single timestamp reused everywhere
+                ts_ms = int(time.time() * 1000)
+
+                # build RSA-only DM payload (signature covers ciphertext|from|to|ts)
+                payload = make_dm_payload(
+                    self.priv,
+                    rec_pub,
+                    text.encode("utf-8"),
+                    self.client_id,
+                    to_id,
+                    ts_ms,
+                )
+
+                env = {
                     "type": "MSG_DIRECT",
                     "from": self.client_id,
-                    "to": to_id.strip(),
-                    "ts": int(time.time() * 1000),
-                    "payload": {"text": text.strip()},
+                    "to": to_id,             # same string as above, no extra .strip()
+                    "ts": ts_ms,             # reuse the same timestamp
+                    "payload": payload,      # contains sender_pub + content_sig
                     "sig": "",
                     "visited_servers": []
                 }
 
-                writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                writer.write((json.dumps(env) + "\n").encode("utf-8"))
                 await writer.drain()
-                print(f"[Sent] DM to {to_id}: {text}")
+                print(f"[Sent] DM to {to_id} (E2E)")
                 continue
 
-            # -------------------- BROADCAST --------------------
             if cmd.startswith("/all "):
                 text = cmd[len("/all "):].strip()
                 if not text:
                     print("[Input] Usage: /all <message>")
                     continue
-
-                message = {
-                    "type": "MSG_BROADCAST",
-                    "from": self.client_id,
-                    "to": "*",
-                    "ts": int(time.time() * 1000),
-                    "payload": {"text": text},
-                    "sig": "",
-                    "visited_servers": []
-                }
-
-                writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                # NOTE: public channel encryption not wired here; this is plaintext broadcast for now.
+                # If needed, you can do per-recipient RSA like DM fan-out at client or leave as is.
+                env = {"type": "MSG_BROADCAST", "from": self.client_id, "to": "*", "ts": int(time.time()*1000),
+                       "payload": {"text": text}, "sig": "", "visited_servers": []}
+                writer.write((json.dumps(env) + "\n").encode("utf-8"))
                 await writer.drain()
                 print(f"[Broadcast] {text}")
                 continue
 
-            # -------------------- FILE TRANSFER --------------------
             if cmd.startswith("/file "):
                 parts = cmd.split(" ", 2)
                 if len(parts) < 3:
                     print("[Input] Usage: /file <user_id> <path>")
                     continue
-
                 to_id, path = parts[1].strip(), parts[2].strip()
                 await self.send_file(writer, to_id, path)
                 continue
 
-            # -------------------- UNKNOWN COMMAND --------------------
             print("[Input] Unknown command. Use /list, /tell, /all, or /file.")
-
 
     # -------------------- MAIN RUN LOOP --------------------
     async def run(self):
         reader, writer = await asyncio.open_connection(self.server_host, self.server_port)
         asyncio.create_task(self.listen_server(reader))
         await self.send_hello(writer)
-
-        await asyncio.sleep(0.5)
-        if self.users:
-            print("\n[Network Users] Known users in the network:")
-            for uid, sid in self.users.items():
-                print(f"  {uid} -> Server {sid}")
-
+        print(f"[Me] user_id = {self.client_id}")
         await self.chat_loop(writer)
 
 

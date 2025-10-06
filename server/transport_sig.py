@@ -1,7 +1,7 @@
-from SOCP.common.b64url import b64u, ub64u
-from SOCP.common.canon import canon, sha256_bytes
-from SOCP.client.crypto_api import sign_pss, verify_pss
-from SOCP.client.crypto_km import pub_from_der
+from common.b64url import b64u, ub64u
+from common.canon import canon, sha256_bytes
+from client.crypto_api import sign_pss, verify_pss
+from client.crypto_km import pub_from_der
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 
