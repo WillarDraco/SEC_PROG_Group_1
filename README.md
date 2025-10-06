@@ -42,7 +42,9 @@ Each folder must contain an empty **init**.py to make imports work.
 
 The introducer is the first server that other servers register to.
 In one terminal, run:
+
 `python3 app_server.py`
+
 You’ll see something like:
 `[Server] Running on 127.0.0.1:8000`
 `[Introducer] Server list received: ...`
