@@ -85,10 +85,15 @@ Output:
 ## Commands
 
 Once connected, you can use the following commands in the client terminal:
+
 /list: Request the user list (shows IDs + which server they’re on) (must do once for each client after enter port)
+
 / tell <user_id> <message>: Send an end-to-end encrypted DM
+
 /all <message>: Broadcast a plaintext message to everyone
+
 /file <user_id> <path>: Send a file (RSA-OAEP encrypted per chunk)
+
 Example:
 
 `/tell 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 hey userX!`
