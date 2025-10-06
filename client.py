@@ -62,10 +62,9 @@ class Client:
                     user_id = payload["user_id"]
                     server_id = payload["server_id"]
                     self.users[user_id] = server_id
-                    # try capture pubkey if present
-                    meta = payload.get("meta", {})
-                    if "pubkey" in meta and meta["pubkey"]:
-                        self.user_pub[user_id] = meta["pubkey"]
+                    pubkey = payload.get("pubkey", "")
+                    if pubkey:
+                        self.user_pub[user_id] = pubkey
                     print(f"\n[Network] {user_id} on {server_id}")
 
                 elif mtype == "USER_LIST":

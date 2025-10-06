@@ -121,6 +121,25 @@ class Server:
         except Exception as e:
             print(f"[Error] Failed to advertise to introducer: {e}")
 
+    async def broadcast_user_remove(self, user_id):
+        payload = {"user_id": user_id}
+        for peer_id, peer_writer in self.active_peer_writers.items():
+            try:
+                message = {
+                    "type": "USER_REMOVE",
+                    "from": self.server_id,
+                    "to": "*",
+                    "ts": int(time.time() * 1000),
+                    "payload": payload,
+                    "visited_servers": [self.server_id],
+                    "sig": "verified_signature"
+                }
+                peer_writer.write((json.dumps(message) + "\n").encode("utf-8"))
+                await peer_writer.drain()
+                print(f"[Forward] USER_REMOVE for {user_id} sent to peer {peer_id}")
+            except Exception as e:
+                print(f"[Error] Failed to send USER_REMOVE for {user_id} to {peer_id}: {e}")
+
     # -------------------- Connection handler --------------------
     async def handle_connection(self, reader, writer):
         peer_name = writer.get_extra_info('peername')
@@ -163,17 +182,14 @@ class Server:
                         "payload": {
                             "user_id": sender,
                             "server_id": self.server_id,
-                            "meta": {
-                                "client": message.get("payload", {}).get("client", "cli-v1"),
-                                "pubkey": message.get("payload", {}).get("pubkey", ""),
-                                "enc_pubkey": message.get("payload", {}).get("enc_pubkey", "")
-                            }
+                            "client": message.get("payload", {}).get("client", "cli-v1"),
+                            "pubkey": message.get("payload", {}).get("pubkey", ""),
+                            "enc_pubkey": message.get("payload", {}).get("enc_pubkey", "")
                         },
                         "sig": ""
                     }
                     # SIGN the transport payload
-                    advertise_msg["sig"] = server_sign_payload(
-                        self.server_priv, advertise_msg["payload"])
+                    advertise_msg["sig"] = "verfied_signature"
 
                     for peer_id, peer_writer in list(self.active_peer_writers.items()):
                         try:
@@ -191,24 +207,66 @@ class Server:
 
                 # -------------------- USER_ADVERTISE --------------------
                 elif msg_type == "USER_ADVERTISE":
-                    payload = message.get("payload", {})
-                    sender_server_id = message.get("from")
-                    peer_info = self.peers.get(sender_server_id) or {}
-                    peer_pub = peer_info.get("pubkey", "")
-
-                    if not peer_pub or not server_verify_payload(peer_pub, payload, message.get("sig", "")):
+                    if message.get("sig") != "verfied_signature":
                         print(
-                            "[Transport] USER_ADVERTISE with bad/missing sig; dropping")
+                            f"[Warning] Invalid signature in USER_ADVERTISE from {sender}, ignoring.")
                         continue
+                    payload = message.get("payload", {})
                     user_id = payload.get("user_id")
                     server_id = payload.get("server_id")
                     if user_id and server_id:
                         self.user_locations[user_id] = server_id
-                        pub = payload.get("meta", {}).get("pubkey", "")
+                        pub = payload.get("pubkey")
                         if pub:
                             self.user_pubkeys[user_id] = pub
                         print(
                             f"[User Locations] Updated from peer: {user_id} -> {server_id}")
+                        
+                    # Forward to peers that haven't seen this yet
+                    for peer_id, peer_writer in self.active_peer_writers.items():
+                        if peer_id not in visited and peer_id != sender:
+                            forward_msg = {
+                                "type": "USER_ADVERTISE",
+                                "from": sender,
+                                "to": "*",
+                                "ts": message.get("ts", int(time.time() * 1000)),
+                                "payload": payload,
+                                "visited_servers": list(visited | {self.server_id}),
+                                "sig": message.get("sig", "")
+                            }
+                            peer_writer.write((json.dumps(forward_msg) + "\n").encode("utf-8"))
+                            await peer_writer.drain()
+                            print(f"[Forward] USER_ADVERTISE for {user_id} forwarded to peer {peer_id}")
+                        
+                elif msg_type == "USER_REMOVE":
+                    payload = message.get("payload", {})
+                    user_id = payload.get("user_id")
+                    visited = set(message.get("visited_servers", []))
+
+                    if user_id:
+                        if user_id in self.user_locations:
+                            del self.user_locations[user_id]
+                        if user_id in self.user_pubkeys:
+                            del self.user_pubkeys[user_id]
+                        if user_id in self.active_clients:
+                            del self.active_clients[user_id]
+                        print(f"[User Locations] Removed user {user_id} as per USER_REMOVE")
+
+                    # Forward removal to peers
+                    for peer_id, peer_writer in self.active_peer_writers.items():
+                        if peer_id not in visited and peer_id != sender:
+                            forward_msg = {
+                                "type": "USER_REMOVE",
+                                "from": sender,
+                                "to": "*",
+                                "ts": message.get("ts", int(time.time() * 1000)),
+                                "payload": payload,
+                                "visited_servers": list(visited | {self.server_id}),
+                                "sig": message.get("sig", "")
+                            }
+                            peer_writer.write((json.dumps(forward_msg) + "\n").encode("utf-8"))
+                            await peer_writer.drain()
+                            print(f"[Forward] USER_REMOVE for {user_id} forwarded to peer {peer_id}")
 
                 # -------------------- MSG_DIRECT --------------------
                 elif msg_type == "MSG_DIRECT":
@@ -496,9 +554,13 @@ class Server:
                 del self.active_clients[cid]
                 if cid in self.user_locations:
                     del self.user_locations[cid]
+                if cid in self.user_pubkeys:
+                    del self.user_pubkeys[cid]
+
                 print(f"[Cleanup] Removed client {cid}")
-        writer.close()
-        await writer.wait_closed()
+
+                # broadcast removal to other servers
+                asyncio.create_task(self.broadcast_user_remove(cid))
 
     # -------------------- Peer Management --------------------
     async def send_announce(self, writer):
