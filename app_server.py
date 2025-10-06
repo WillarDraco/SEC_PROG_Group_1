@@ -136,9 +136,11 @@ class Server:
                 }
                 peer_writer.write((json.dumps(message) + "\n").encode("utf-8"))
                 await peer_writer.drain()
-                print(f"[Forward] USER_REMOVE for {user_id} sent to peer {peer_id}")
+                print(
+                    f"[Forward] USER_REMOVE for {user_id} sent to peer {peer_id}")
             except Exception as e:
-                print(f"[Error] Failed to send USER_REMOVE for {user_id} to {peer_id}: {e}")
+                print(
+                    f"[Error] Failed to send USER_REMOVE for {user_id} to {peer_id}: {e}")
 
     # -------------------- Connection handler --------------------
     async def handle_connection(self, reader, writer):
@@ -221,7 +223,7 @@ class Server:
                             self.user_pubkeys[user_id] = pub
                         print(
                             f"[User Locations] Updated from peer: {user_id} -> {server_id}")
-                        
+
                     # Forward to peers that haven't seen this yet
                     for peer_id, peer_writer in self.active_peer_writers.items():
                         if peer_id not in visited and peer_id != sender:
@@ -234,10 +236,12 @@ class Server:
                                 "visited_servers": list(visited | {self.server_id}),
                                 "sig": message.get("sig", "")
                             }
-                            peer_writer.write((json.dumps(forward_msg) + "\n").encode("utf-8"))
+                            peer_writer.write(
+                                (json.dumps(forward_msg) + "\n").encode("utf-8"))
                             await peer_writer.drain()
-                            print(f"[Forward] USER_ADVERTISE for {user_id} forwarded to peer {peer_id}")
-                        
+                            print(
+                                f"[Forward] USER_ADVERTISE for {user_id} forwarded to peer {peer_id}")
+
                 elif msg_type == "USER_REMOVE":
                     payload = message.get("payload", {})
                     user_id = payload.get("user_id")
@@ -250,7 +254,8 @@ class Server:
                             del self.user_pubkeys[user_id]
                         if user_id in self.active_clients:
                             del self.active_clients[user_id]
-                        print(f"[User Locations] Removed user {user_id} as per USER_REMOVE")
+                        print(
+                            f"[User Locations] Removed user {user_id} as per USER_REMOVE")
 
                     # Forward removal to peers
                     for peer_id, peer_writer in self.active_peer_writers.items():
@@ -264,9 +269,11 @@ class Server:
                                 "visited_servers": list(visited | {self.server_id}),
                                 "sig": message.get("sig", "")
                             }
-                            peer_writer.write((json.dumps(forward_msg) + "\n").encode("utf-8"))
+                            peer_writer.write(
+                                (json.dumps(forward_msg) + "\n").encode("utf-8"))
                             await peer_writer.drain()
-                            print(f"[Forward] USER_REMOVE for {user_id} forwarded to peer {peer_id}")
+                            print(
+                                f"[Forward] USER_REMOVE for {user_id} forwarded to peer {peer_id}")
 
                 # -------------------- MSG_DIRECT --------------------
                 elif msg_type == "MSG_DIRECT":
@@ -520,7 +527,7 @@ class Server:
                     user_id = payload.get("user_id")
                     if user_id in self.active_clients:
                         client_msg = {
-                            "type": "MSG_DIRECT",
+                            "type": "USER_DELIVER",
                             "from": payload.get("sender"),
                             "to": user_id,
                             "ts": message.get("ts"),
@@ -529,7 +536,7 @@ class Server:
                                 "sender_pub": payload.get("sender_pub"),
                                 "content_sig": payload.get("content_sig"),
                             },
-                            "sig": ""
+                            "sig": server_sign_payload(self.server_priv, payload)
                         }
                         w = self.active_clients[user_id]
                         w.write(
