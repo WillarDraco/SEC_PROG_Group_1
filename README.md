@@ -1,0 +1,80 @@
+# Secure Chat Application (SOCP v1.3)
+
+This project implements a secure peer-to-peer chat system with:
+End-to-end encrypted direct messages (RSA-4096 + PSS)
+Plaintext broadcast messages
+Secure file transfer (RSA-OAEP per chunk)
+Multi-server routing and introducer registration
+
+## Requirements
+
+Make sure you have Python 3.10+ installed.
+Then install dependencies:
+`pip install cryptography`
+
+## Project Structure
+
+SecureProgramming/
+│
+├── app_server.py # Main server app
+├── client.py # Main client app
+│
+├── server/
+│ ├── **init**.py
+│ └── transport_sig.py
+│
+├── client/
+│ ├── **init**.py
+│ ├── crypto_km.py
+│ ├── crypto_dm.py
+│ ├── crypto_file.py
+│ ├── crypto_api.py
+│
+└── common/
+├── **init**.py
+├── b64url.py
+└── canon.py
+Each folder must contain an empty **init**.py to make imports work.
+
+## How to Run the System
+
+### 1 Start the Introducer
+
+The introducer is the first server that other servers register to.
+In one terminal, run:
+`python3 app_server.py`
+You’ll see something like:
+`[Server] Running on 127.0.0.1:8000`
+`[Introducer] Server list received: ...`
+Leave this running.
+
+### 2️ Start Additional Servers
+
+Open two more terminals, and run each with a different port:
+`python3 app_server.py`
+Each server will auto-register with the introducer and print something like:
+`[Server] Running on 127.0.0.1:36095`
+`[Introducer] Server list received: ...`
+
+### 3 Start Clients
+
+Open another terminal for each client.
+Run the client, and when asked for Server port, enter one of the ports printed by a server.
+Example:
+`python3 client.py`
+`Server port: 36095`
+Output:
+`[Hello] Sent USER_HELLO (pubkey attached)`
+`[Me] user_id = e08d3983-64ac-40c9-ad99-9f3a836dfe2f`
+
+## Commands
+
+Once connected, you can use the following commands in the client terminal:
+/list: Request the user list (shows IDs + which server they’re on) (must do once for each client after enter port)
+/ tell <user_id> <message>: Send an end-to-end encrypted DM
+/all <message>: Broadcast a plaintext message to everyone
+/file <user_id> <path>: Send a file (RSA-OAEP encrypted per chunk)
+Example:
+`/tell 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 hey userX!`
+`/all hello everyone`
+`/file 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 test.txt`
