@@ -5,8 +5,9 @@ import uuid
 import time
 import hashlib
 import json
-
+import os
 from server.transport_sig import server_sign_payload, server_verify_payload
+from client.crypto_km import gen_rsa_4096, save_pem_priv, load_pem_priv, pub_der_b64u
 
 
 class Server:
@@ -16,6 +17,9 @@ class Server:
         self.port = port
         self.introducer_host = introducer_host
         self.introducer_port = introducer_port
+        self.server_priv = None
+        self.server_pub_b64u = None
+        self.server_key_path = "server.pem"
 
         self.user_pubkeys = {}   # user_id -> pubkey_b64u
         self.peers = {}                 # server_id -> {"host":..., "port":...}
@@ -24,8 +28,18 @@ class Server:
         self.user_locations = {}        # client_id -> server_id
         self.active_files = {}          # file_id -> metadata
         self.seen_msgs = set()   # remembers broadcast ids we've processed
+        # --- transport keypair (server identity) ---
+        if os.path.exists(self.server_key_path):
+            self.server_priv = load_pem_priv(
+                self.server_key_path, password=None)
+        else:
+            self.server_priv = gen_rsa_4096()
+            save_pem_priv(self.server_priv,
+                          self.server_key_path, password=None)
+        self.server_pub_b64u = pub_der_b64u(self.server_priv)
 
     # Helper to compute a sstable id
+
     def _broadcast_id(self, msg: dict) -> str:
         core = {
             "type": msg.get("type"),
@@ -56,7 +70,7 @@ class Server:
                     "server_id": self.server_id,
                     "host": self.host,
                     "port": self.port,
-                    "pubkey": "FAKE_PUBLIC_KEY"
+                    "pubkey": self.server_pub_b64u,
                 }
             }
             writer.write((json.dumps(join_message) + "\n").encode("utf-8"))
@@ -157,6 +171,9 @@ class Server:
                         },
                         "sig": ""
                     }
+                    # SIGN the transport payload
+                    advertise_msg["sig"] = server_sign_payload(
+                        self.server_priv, advertise_msg["payload"])
 
                     for peer_id, peer_writer in list(self.active_peer_writers.items()):
                         try:
@@ -175,6 +192,14 @@ class Server:
                 # -------------------- USER_ADVERTISE --------------------
                 elif msg_type == "USER_ADVERTISE":
                     payload = message.get("payload", {})
+                    sender_server_id = message.get("from")
+                    peer_info = self.peers.get(sender_server_id) or {}
+                    peer_pub = peer_info.get("pubkey", "")
+
+                    if not peer_pub or not server_verify_payload(peer_pub, payload, message.get("sig", "")):
+                        print(
+                            "[Transport] USER_ADVERTISE with bad/missing sig; dropping")
+                        continue
                     user_id = payload.get("user_id")
                     server_id = payload.get("server_id")
                     if user_id and server_id:
@@ -209,16 +234,33 @@ class Server:
                             peer_writer = self.active_peer_writers.get(
                                 target_server_id)
                             if peer_writer:
-                                message["visited_servers"] = list(
-                                    visited | {self.server_id})
+                                pld = message.get("payload", {})
+                                srv_deliver = {
+                                    "type": "SERVER_DELIVER",
+                                    "from": self.server_id,
+                                    "to": target_server_id,
+                                    # reuse sender ts is fine
+                                    "ts": message["ts"],
+                                    "payload": {
+                                        "user_id": recipient,
+                                        "ciphertext": pld["ciphertext"],
+                                        "sender": message["from"],
+                                        "sender_pub": pld["sender_pub"],
+                                        "content_sig": pld["content_sig"],
+                                    },
+                                    "sig": ""
+                                }
+                                srv_deliver["sig"] = server_sign_payload(
+                                    self.server_priv, srv_deliver["payload"])
+
                                 peer_writer.write(
-                                    (json.dumps(message) + "\n").encode("utf-8"))
+                                    (json.dumps(srv_deliver) + "\n").encode("utf-8"))
                                 await peer_writer.drain()
                                 print(
-                                    f"[Forwarded] Direct message from {sender} forwarded to server {target_server_id}")
+                                    f"[Forwarded] SERVER_DELIVER for {recipient} -> server {target_server_id}")
                             else:
                                 print(
-                                    f"[Routing] Target server {target_server_id} for {recipient} not connected")
+                                    f"[Routing] Target server {target_server_id} not connected")
                     else:
                         error_msg = {"type": "USER_NOT_FOUND", "from": self.server_id,
                                      "to": sender, "payload": {"missing_user": recipient}}
@@ -245,6 +287,9 @@ class Server:
                         "payload": {"users": users_sorted},
                         "sig": ""
                     }
+                    # SIGN the payload
+                    resp["sig"] = server_sign_payload(
+                        self.server_priv, resp["payload"])
                     writer.write((json.dumps(resp) + "\n").encode("utf-8"))
                     await writer.drain()
                     print(f"[User List] Sent USER_LIST to {sender} on request")
@@ -295,6 +340,31 @@ class Server:
 
                 # -------------------- SERVER_ANNOUNCE --------------------
                 elif msg_type == "SERVER_ANNOUNCE":
+                    payload = message.get("payload", {})
+                    sender_server_id = message.get("from")
+
+                    # If we already know their pubkey (from introducer), verify strictly
+                    known_pub = (self.peers.get(sender_server_id)
+                                 or {}).get("pubkey", "")
+                    if known_pub:
+                        if not server_verify_payload(known_pub, payload, message.get("sig", "")):
+                            print(
+                                "[Transport] SERVER_ANNOUNCE invalid signature; dropping")
+                            continue
+                    else:
+                        # First time seeing them (or introducer didn’t give us their pubkey yet):
+                        # accept, but record the pubkey they assert *for future verification*.
+                        if "pubkey" in payload and payload["pubkey"]:
+                            self.peers[sender_server_id] = {
+                                "host": payload.get("host"),
+                                "port": payload.get("port"),
+                                "pubkey": payload["pubkey"],
+                            }
+                        else:
+                            print(
+                                "[Transport] SERVER_ANNOUNCE missing pubkey; dropping")
+                            continue
+
                     peer_id = sender
                     if peer_id not in self.active_peer_writers and peer_id != self.server_id:
                         try:
@@ -369,6 +439,51 @@ class Server:
                         print(f"[File] Transfer complete for {file_id}")
                         del self.active_files[file_id]
 
+                # -------------------- Server Deliver --------------------
+
+                elif msg_type == "SERVER_DELIVER":
+                    payload = message.get("payload", {})
+                    sender_server_id = message.get("from")
+                    # 1) verify the transport signature using sender server's pub
+                    peer_info = self.peers.get(sender_server_id) or {}
+                    sender_server_pub_b64u = peer_info.get("pubkey", "")
+                    if not sender_server_pub_b64u:
+                        print(
+                            "[Transport] Missing sender server pubkey; dropping")
+                        continue
+
+                    ok = server_verify_payload(
+                        sender_server_pub_b64u, payload, message.get("sig", ""))
+                    if not ok:
+                        print("[Transport] INVALID server sig; dropping")
+                        continue
+
+                    # 2) deliver to the local user using the format client already understands (MSG_DIRECT)
+                    user_id = payload.get("user_id")
+                    if user_id in self.active_clients:
+                        client_msg = {
+                            "type": "MSG_DIRECT",
+                            "from": payload.get("sender"),
+                            "to": user_id,
+                            "ts": message.get("ts"),
+                            "payload": {
+                                "ciphertext": payload.get("ciphertext"),
+                                "sender_pub": payload.get("sender_pub"),
+                                "content_sig": payload.get("content_sig"),
+                            },
+                            "sig": ""
+                        }
+                        w = self.active_clients[user_id]
+                        w.write(
+                            (json.dumps(client_msg) + "\n").encode("utf-8"))
+                        await w.drain()
+                        print(
+                            f"[Delivered] SERVER_DELIVER → MSG_DIRECT to local user {user_id}")
+                    else:
+                        # optional: try forwarding (update self.user_locations?) or drop
+                        print(
+                            f"[Transport] User {user_id} not local; dropping or implement re-route.")
+
                 else:
                     print(f"[Warning] Unknown message type: {msg_type}")
 
@@ -391,9 +506,13 @@ class Server:
             "type": "SERVER_ANNOUNCE",
             "from": self.server_id,
             "to": "*",
-            "payload": {"host": self.host, "port": self.port, "pubkey": "FAKE_PUBLIC_KEY"},
-            "sig": "..."
+            "payload": {"host": self.host, "port": self.port, "pubkey": self.server_pub_b64u},
+            "sig": ""
         }
+        # SIGN the payload
+        announce_msg["sig"] = server_sign_payload(
+            self.server_priv, announce_msg["payload"])
+
         writer.write((json.dumps(announce_msg) + "\n").encode("utf-8"))
         await writer.drain()
         print("[Announce] Sent SERVER_ANNOUNCE to peer")

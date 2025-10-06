@@ -10,6 +10,11 @@ from client.crypto_km import gen_rsa_4096, save_pem_priv, load_pem_priv, pub_der
 from client.crypto_dm import make_dm_payload, open_dm_payload
 from client.crypto_file import make_file_chunk_payload, open_file_chunk_payload
 
+# Max RSA-OAEP plaintext size (bytes) for 4096-bit key, SHA-256
+RSA_MOD_BYTES = 512
+HASH_LEN = 32  # SHA-256
+RSA_OAEP_MAX = RSA_MOD_BYTES - 2*HASH_LEN - 2  # = 446
+
 
 class Client:
     def __init__(self, server_host="127.0.0.1", server_port=9000, key_path="me.pem", key_password=b"pwd"):
@@ -217,7 +222,7 @@ class Client:
         print(
             f"[File] Starting file transfer '{file_path}' ({filesize} bytes)")
 
-        CHUNK_SIZE = 32 * 1024
+        CHUNK_SIZE = 400
         with open(file_path, "rb") as f:
             index = 0
             sent = 0
@@ -282,6 +287,12 @@ class Client:
 
                 # single timestamp reused everywhere
                 ts_ms = int(time.time() * 1000)
+
+                pt = text.encode("utf-8")
+                if len(pt) > RSA_OAEP_MAX:
+                    print(f"[DM] Message too long for RSA-OAEP ({len(pt)} bytes). "
+                          f"Limit is {RSA_OAEP_MAX} bytes. Please shorten your message.")
+                    continue
 
                 # build RSA-only DM payload (signature covers ciphertext|from|to|ts)
                 payload = make_dm_payload(
