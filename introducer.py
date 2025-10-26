@@ -1,3 +1,10 @@
+"""
+Group 1
+Name                        ID              Discord
+Benjamin Signorelli         a1861126        dracomaleficus
+Willard Gorman              a1863235        nihili
+Gia Thanh Nguyen            a1876555        g.l.toys
+"""
 # introducer.py
 # Central registry node that links servers together.
 # Tracks which users belong to which server and distributes user updates.

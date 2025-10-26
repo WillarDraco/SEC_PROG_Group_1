@@ -1,3 +1,10 @@
+"""
+Group 1
+Name                        ID              Discord
+Benjamin Signorelli         a1861126        dracomaleficus
+Willard Gorman              a1863235        nihili
+Gia Thanh Nguyen            a1876555        g.l.toys
+"""
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 

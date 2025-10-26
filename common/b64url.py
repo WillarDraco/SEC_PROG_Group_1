@@ -1,3 +1,10 @@
+"""
+Group 1
+Name                        ID              Discord
+Benjamin Signorelli         a1861126        dracomaleficus
+Willard Gorman              a1863235        nihili
+Gia Thanh Nguyen            a1876555        g.l.toys
+"""
 import base64
 import re
 
