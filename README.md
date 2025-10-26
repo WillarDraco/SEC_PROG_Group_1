@@ -127,3 +127,15 @@ Example:
 /all hello everyone
 /file 39a3ba6f-80d9-423b-99a6-1172f9ab1a71 test.txt
 ```
+
+## Exploit 2
+
+in send_fake_user.py, change the port and ip to match the running server
+
+run the python script to send fake user to the server
+
+```
+python3 send_fake_user.py
+```
+
+See what happens in the server terminal
