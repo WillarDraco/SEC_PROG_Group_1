@@ -64,19 +64,18 @@ The introducer is the first server that other servers register to.
 In one terminal, run:
 
 ```
-python3 app_server.py
+python3 introducer.py
 ```
 
 You’ll see something like:
 
 ```
-[Server] Running on 127.0.0.1:8000
-[Introducer] Server list received: ...
+[Introducer] Public key exported to introducer_pub.b64u
 ```
 
 Leave this running.
 
-### 2️ Start Additional Servers
+### 2️ Start Additional Servers (with hard coded key/ exploit 1)
 
 Open two more terminals, and run each with a different port:
 
