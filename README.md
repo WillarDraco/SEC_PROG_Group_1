@@ -30,24 +30,28 @@ pip install cryptography
 ```
 SecureProgramming/
 │
-├── app_server.py # Main server app
-├── client.py # Main client app
+├── app_server.py # Main server app (Thanh + Will + Ben)
+├── client.py # Main client app (Thanh + Will + Ben)
+├── introducer.py (Thanh + Will)
+├── protocol.py (Ben + Will)
+├── README (Thanh)
 │
-├── server/
+├── server/ (Thanh)
 │ ├── __init__.py
 │ └── transport_sig.py
 │
-├── client/
+├── client/ (Thanh)
 │ ├── __init__.py
 │ ├── crypto_km.py
 │ ├── crypto_dm.py
 │ ├── crypto_file.py
 │ ├── crypto_api.py
 │
-└── common/
+└── common/ (Thanh)
 ├── __init__.py
 ├── b64url.py
 └── canon.py
+
 ```
 
 Each folder must contain an empty `__init__.py` to make imports work.
