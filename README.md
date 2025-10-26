@@ -60,6 +60,7 @@ The introducer is the first server that other servers register to.
 In one terminal, run:
 
 ```
+export SERVER_KEY_PASS= "Put any password here"
 python3 app_server.py
 ```
 
@@ -77,14 +78,15 @@ Leave this running.
 Open two more terminals, and run each with a different port:
 
 ```
+export SERVER_KEY_PASS= "Put the previous password you set"
 python3 app_server.py
 ```
 
 Each server will auto-register with the introducer and print something like:
 
 ```
-[Server] Running on 127.0.0.1:36095
-[Introducer] Server list received: ...
+[Server] Server running on 127.0.x.x:abcde
+[Server] Registered with introducer as
 ```
 
 ### 3 Start Clients
@@ -95,7 +97,7 @@ Example:
 
 ```
 python3 client.py
-Server port: 36095
+Server port: abcde
 ```
 
 It then will prompt for password, just press "Enter" (leave the password empty)

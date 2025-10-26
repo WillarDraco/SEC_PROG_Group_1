@@ -51,14 +51,25 @@ class Server:
         self.peers = {}                 # peer_id -> {host, port, pubkey}
         self.seen_msgs = set()
 
-        # Load or create keypair
+        # ----------------------------------------------------------------
+        # Load or create keypair securely
+        # ----------------------------------------------------------------
+        key_pass = os.getenv("SERVER_KEY_PASS")  # use env var for security
+        key_pass_bytes = key_pass.encode() if key_pass else None
+
         if os.path.exists(self.server_key_path):
             self.server_priv = load_pem_priv(
-                self.server_key_path, password=None)
+                self.server_key_path, password=key_pass_bytes)
         else:
             self.server_priv = gen_rsa_4096()
-            save_pem_priv(self.server_priv,
-                          self.server_key_path, password=None)
+            save_pem_priv(
+                self.server_priv,
+                self.server_key_path,
+                password=key_pass_bytes
+            )
+            if not key_pass_bytes:
+                log.warning(
+                    "Server key saved unencrypted (demo mode). Set SERVER_KEY_PASS for encryption.")
         self.server_pub_b64u = pub_der_b64u(self.server_priv)
 
     # ----------------------------------------------------------------
