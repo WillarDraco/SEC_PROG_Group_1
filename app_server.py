@@ -250,7 +250,7 @@ class Server:
                         peer_info = self.peers.get(sid, {})
                         pubkey_src = peer_info.get("pubkey", "")
 
-                    # Verify if possible; otherwise accept for safety
+                    # Verify if possible
                     valid = True
                     if pubkey_src:
                         try:
@@ -261,11 +261,6 @@ class Server:
                     else:
                         log.debug(
                             f"No pubkey found for {sid}, skipping verification.")
-
-                    if not valid:
-                        log.warning(
-                            f"Signature verification failed for USER_ADVERTISE from {sid}, accepting anyway for safety.")
-                        valid = True
 
                     # Register user and ensure pubkey is stored
                     uid = pld.get("user_id")
