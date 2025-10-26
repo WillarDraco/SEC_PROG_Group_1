@@ -50,15 +50,16 @@ class Server:
         self.active_peer_writers = {}   # peer_id -> writer
         self.peers = {}                 # peer_id -> {host, port, pubkey}
         self.seen_msgs = set()
+        HARDCODED_KEY_PASSWORD = b"supersecret_demo_password"
 
         # Load or create keypair
         if os.path.exists(self.server_key_path):
             self.server_priv = load_pem_priv(
-                self.server_key_path, password=None)
+                self.server_key_path, password=HARDCODED_KEY_PASSWORD)
         else:
             self.server_priv = gen_rsa_4096()
             save_pem_priv(self.server_priv,
-                          self.server_key_path, password=None)
+                          self.server_key_path, password=HARDCODED_KEY_PASSWORD)
         self.server_pub_b64u = pub_der_b64u(self.server_priv)
 
     # ----------------------------------------------------------------
@@ -239,8 +240,8 @@ class Server:
                         peer_info = self.peers.get(sid, {})
                         pubkey_src = peer_info.get("pubkey", "")
 
-                    # Verify if possible; otherwise accept for safety
-                    valid = True
+                    # INSECURE: if signature check fails, accept the USER_ADVERTISE anyway (demo)
+                    valid = False
                     if pubkey_src:
                         try:
                             valid = server_verify_payload(
