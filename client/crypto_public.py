@@ -1,3 +1,10 @@
+"""
+Group 1
+Name                        ID              Discord
+Benjamin Signorelli         a1861126        dracomaleficus
+Willard Gorman              a1863235        nihili
+Gia Thanh Nguyen            a1876555        g.l.toys
+"""
 from common.b64url import b64u, ub64u
 from common.canon import canon, sha256_bytes
 from client.crypto_api import sign_pss, verify_pss

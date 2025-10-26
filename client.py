@@ -1,3 +1,10 @@
+"""
+Group 1
+Name                        ID              Discord
+Benjamin Signorelli         a1861126        dracomaleficus
+Willard Gorman              a1863235        nihili
+Gia Thanh Nguyen            a1876555        g.l.toys
+"""
 # client.py
 # Secure overlay chat client for encrypted messaging and file transfer.
 # Communicates directly with a single server node.

@@ -9,6 +9,7 @@ Multi-server routing and introducer registration
 ## Contact
 
 ```
+Group 1
 Name                        ID              Discord
 Benjamin Signorelli         a1861126        dracomaleficus
 Willard Gorman              a1863235        nihili
@@ -96,6 +97,9 @@ Example:
 python3 client.py
 Server port: 36095
 ```
+
+It then will prompt for password, just press "Enter" (leave the password empty)
+Note: client keys are unencrypted for ease of testing
 
 Output:
 
