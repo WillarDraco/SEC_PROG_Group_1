@@ -6,6 +6,8 @@ Plaintext broadcast messages
 Secure file transfer (RSA-OAEP per chunk)
 Multi-server routing and introducer registration
 
+The two branches clean and backdoor feature the clean and backdoor/vulnerable code respectively.
+
 ## Contact
 
 ```
